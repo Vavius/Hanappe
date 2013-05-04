@@ -10,13 +10,14 @@ function onCreate(e)
     }
     
     button1 = widget.Button {
-        size = {200, 50},
+        size = {100, 50},
         pos = {50, 50},
         text = "Test1",
         parent = view,
         onClick = button1_OnClick,
         onDown = button1_OnDown,
         onUp = button1_OnUp,
+        selectedFrame = "btn_fb.png",
     }
     
     button2 = widget.Button()

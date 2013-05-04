@@ -927,6 +927,7 @@ M.Event = Event
 
 -- Constraints
 Event.CREATE            = "create"
+Event.DESTROY           = "destroy"
 Event.OPEN              = "open"
 Event.CLOSE             = "close"
 Event.OPEN_COMPLETE     = "openComplete"
@@ -1722,10 +1723,49 @@ end
 -- Returns the bottom position.
 -- @return bottom
 --------------------------------------------------------------------------------
+
 function DisplayObject:getBottom()
     local left, top = self:getPos()
     local width, height = self:getSize()
     return top + height
+end
+
+--------------------------------------------------------------------------------
+-- Sets position relative to screen size 
+-- (0, 0) is bottom-left, (1, 1) is top-right
+--------------------------------------------------------------------------------
+function DisplayObject:setRelPos(x, y)
+    local locX, locY, locZ = self:getLoc()
+    self:setLoc(x * M.screenWidth, y * M.screenHeight, locZ)
+end
+
+--------------------------------------------------------------------------------
+-- Returns the position relative to screen size 
+-- (0, 0) is bottom-left, (1, 1) is top-right
+--------------------------------------------------------------------------------
+function DisplayObject:getRelPos()
+    local locX, locY, locZ = self:getLoc()
+    return locX / M.screenWidth, locY / M.screenHeight
+end
+
+--------------------------------------------------------------------------------
+-- Sets pivot relative to object size 
+-- (0, 0) is bottom-left, (1, 1) is top-right
+--------------------------------------------------------------------------------
+function DisplayObject:setRelPiv(x, y)
+    local pivX, pivY, pivZ = self:getPiv()
+    local w, h, d = self:getSize()
+    self:setPiv(x * w, y * h, pivZ)
+end
+
+--------------------------------------------------------------------------------
+-- Returns pivot relative to object size 
+-- (0, 0) is bottom-left, (1, 1) is top-right
+--------------------------------------------------------------------------------
+function DisplayObject:getRelPiv()
+    local pivX, pivY, pivZ = self:getPiv()
+    local w, h, d = self:getSize()
+    return pivX / w, pivY / h
 end
 
 --------------------------------------------------------------------------------
@@ -2139,6 +2179,7 @@ function Scene:close(params)
     SceneMgr:removeScene(self)
 
     if self.sceneDestroyEnabled then
+        self:dispatchEvent(Event.DESTROY, params)
         Resources.destroyModule(self.controller)
     end
 end
@@ -3122,6 +3163,18 @@ function TouchHandler:dispose()
     layer:removeEventListener(Event.TOUCH_UP, self.onTouch, self)
     layer:removeEventListener(Event.TOUCH_MOVE, self.onTouch, self)
     layer:removeEventListener(Event.TOUCH_CANCEL, self.onTouch, self)
+end
+
+--------------------------------------------------------------------------------
+-- Custom helpers/wrappers for even less code
+--------------------------------------------------------------------------------
+function M.spriteWithFrame(textureBase, frameName)
+    local textureFile = textureBase .. ".png"
+    local luaFile = textureBase .. ".lua"
+    local sheetImage = SheetImage(textureFile)
+    sheetImage:setTextureAtlas(luaFile)
+    sheetImage:setIndexByName(frameName)
+    return sheetImage
 end
 
 return M

@@ -28,6 +28,7 @@ local Layer = flower.Layer
 local Group = flower.Group
 local Image = flower.Image
 local NineImage = flower.NineImage
+local SheetImage = flower.SheetImage
 local MovieClip = flower.MovieClip
 local Label = flower.Label
 local Rect = flower.Rect
@@ -70,9 +71,20 @@ local function buildTheme()
             disabledColor = {0.5, 0.5, 0.5, 1},
         },
         Button = {
-            normalTexture = "skins/button_normal.9.png",
-            selectedTexture = "skins/button_selected.9.png",
-            disabledTexture = "skins/button_normal.9.png",
+            normalFrame = "btn_back.png",
+            selectedFrame = "btn_calendar.png",
+            disabledFrame = "btn_back.png",
+            textureBase = "skins/assets",
+            fontName = "VL-PGothic.ttf",
+            textSize = 20,
+            textColor = {0, 0, 0, 1},
+            textDisabledColor = {0.5, 0.5, 0.5, 1},
+            textAlign = {"center", "center"},
+        },
+        Button9Patch = {
+            normalImage = "skins/button_normal.9.png",
+            selectedImage = "skins/button_selected.9.png",
+            disabledImage = "skins/button_normal.9.png",
             fontName = "VL-PGothic.ttf",
             textSize = 20,
             textColor = {0, 0, 0, 1},
@@ -391,7 +403,7 @@ end
 -- Initialization is the process of internal variables.
 -- Please to inherit this function if the definition of the variable.
 --------------------------------------------------------------------------------
-function UIComponent:_initInternal()
+function UIComponent:_initInternal(params)
     self.isUIComponent = true
     
     self._enabled = true
@@ -948,14 +960,14 @@ end
 Button = class(UIComponent)
 M.Button = Button
 
---- Style: selectedTexture
-Button.STYLE_NORMAL_TEXTURE = "normalTexture"
+--- Style: normalTexture
+Button.STYLE_NORMAL_IMAGE = "normalImage"
 
 --- Style: selectedTexture
-Button.STYLE_SELECTED_TEXTURE = "selectedTexture"
+Button.STYLE_SELECTED_IMAGE = "selectedImage"
 
 --- Style: disabledTexture
-Button.STYLE_DISABLED_TEXTURE = "disabledTexture"
+Button.STYLE_DISABLED_IMAGE = "disabledImage"
 
 --- Style: fontName
 Button.STYLE_FONT_NAME = "fontName"
@@ -969,14 +981,62 @@ Button.STYLE_TEXT_COLOR = "textColor"
 --- Style: horizotalAlign
 Button.STYLE_TEXT_ALIGN = "textAlign"
 
+--- Style: textureBase
+Button.STYLE_TEXTURE_BASE = "textureBase"
+
+--- Style: normalFrame
+Button.STYLE_NORMAL_FRAME = "normalFrame"
+
+--- Style: selectedFrame
+Button.STYLE_SELECTED_FRAME = "selectedFrame"
+
+--- Style: disabledFrame
+Button.STYLE_DISABLED_FRAME = "disabledFrame"
+
+--------------------------------------------------------------------------------
+-- Buttons can use NineImage or SpriteFrames as background
+-- Extends sheetImage to expose some of the api's from NineImage
+--------------------------------------------------------------------------------
+local ButtonBGSheetImage = class(SheetImage)
+function ButtonBGSheetImage:init(imagePath, textureBase)
+    local textureFile = textureBase .. ".png"
+    local luaFile = textureBase .. ".lua"
+    SheetImage.init(self, textureFile)
+    self:setTextureAtlas(luaFile)
+    self:setIndexByName(imagePath)
+
+    function self:setImage(imagePath, width, height)
+        self:setIndexByName(imagePath)
+    end
+
+    function self:setSize(width, height)
+        local w, h = self:getSize()
+        self:setScl(width / w, height / h)
+    end
+
+    function self:getContentRect()
+        local xMin, yMin, zMin, xMax, yMax, zMax = self:getBounds()
+        return xMin or 0, yMin or 0, xMax or 0, yMax or 0
+    end
+end
+
+function CreateButtonBG(imagePath, textureBase)
+    if textureBase then
+        return ButtonBGSheetImage(imagePath, textureBase)
+    else
+        return NineImage(imagePath)
+    end
+end
+
 --------------------------------------------------------------------------------
 -- Initializes the internal variables.
 --------------------------------------------------------------------------------
-function Button:_initInternal()
+function Button:_initInternal(params)
     Button.__super._initInternal(self)
-    self._themeName = "Button"
+    self._themeName = params and params.themeName or "Button"
     self._touchDownIdx = nil
     self._buttonImage = nil
+    self._buttonSprite = nil
     self._text = ""
     self._textLabel = nil
 end
@@ -1000,7 +1060,9 @@ function Button:_createChildren()
     Button.__super._createChildren(self)
     
     local imagePath = assert(self:getImagePath())
-    self._buttonImage = NineImage(imagePath)
+    print(imagePath)
+    local textureBase = self:getStyle(Button.STYLE_TEXTURE_BASE)
+    self._buttonImage = CreateButtonBG(imagePath, textureBase)
     self._textLabel = Label(self._text, 100, 30)
 
     self:addChild(self._buttonImage)
@@ -1019,7 +1081,7 @@ function Button:updateDisplay()
 
     local textLabel = self._textLabel
     local xMin, yMin, xMax, yMax = buttonImage:getContentRect()
-    local textWidth, textHeight = xMax - xMin, yMax - yMin    
+    local textWidth, textHeight = xMax - xMin, yMax - yMin
     textLabel:setSize(textWidth, textHeight)
     textLabel:setPos(xMin, yMin)
     textLabel:setString(self:getText())
@@ -1043,11 +1105,11 @@ end
 --------------------------------------------------------------------------------
 function Button:getImagePath()
     if not self:isEnabled() then
-        return self:getStyle(Button.STYLE_DISABLED_TEXTURE)
+        return self:getStyle(Button.STYLE_TEXTURE_BASE) and self:getStyle(Button.STYLE_DISABLED_FRAME) or self:getStyle(Button.STYLE_DISABLED_IMAGE)
     elseif self:isButtonDown() then
-        return self:getStyle(Button.STYLE_SELECTED_TEXTURE)
+        return self:getStyle(Button.STYLE_TEXTURE_BASE) and self:getStyle(Button.STYLE_SELECTED_FRAME) or self:getStyle(Button.STYLE_SELECTED_IMAGE)
     else
-        return self:getStyle(Button.STYLE_NORMAL_TEXTURE)
+        return self:getStyle(Button.STYLE_TEXTURE_BASE) and self:getStyle(Button.STYLE_NORMAL_FRAME) or self:getStyle(Button.STYLE_NORMAL_IMAGE)
     end
 end
 
@@ -1063,24 +1125,56 @@ end
 -- Sets the normal texture.
 -- @param texture texture
 --------------------------------------------------------------------------------
-function Button:setNormalTexture(texture)
-    self:setStyle(Button.STYLE_NORMAL_TEXTURE, texture)
+function Button:setTextureBase(texture)
+    self:setStyle(Button.STYLE_TEXTURE_BASE, texture)
 end
 
 --------------------------------------------------------------------------------
--- Sets the selected texture.
+-- Sets the normal frame.
 -- @param texture texture
 --------------------------------------------------------------------------------
-function Button:setSelectedTexture(texture)
-    self:setStyle(Button.STYLE_SELECTED_TEXTURE, texture)
+function Button:setNormalFrame(frameName)
+    self:setStyle(Button.STYLE_NORMAL_FRAME, frameName)
 end
 
 --------------------------------------------------------------------------------
--- Sets the selected texture.
+-- Sets the selected frame.
 -- @param texture texture
 --------------------------------------------------------------------------------
-function Button:setDisabledTexture(texture)
-    self:setStyle(Button.STYLE_DISABLED_TEXTURE, texture)
+function Button:setSelectedFrame(frameName)
+    self:setStyle(Button.STYLE_SELECTED_FRAME, frameName)
+end
+
+--------------------------------------------------------------------------------
+-- Sets the disabled frame.
+-- @param texture texture
+--------------------------------------------------------------------------------
+function Button:setDisabledFrame(frameName)
+    self:setStyle(Button.STYLE_DISABLED_FRAME, frameName)
+end
+
+--------------------------------------------------------------------------------
+-- Sets the normal image.
+-- @param texture texture
+--------------------------------------------------------------------------------
+function Button:setNormalImage(texture)
+    self:setStyle(Button.STYLE_NORMAL_IMAGE, texture)
+end
+
+--------------------------------------------------------------------------------
+-- Sets the selected image.
+-- @param texture texture
+--------------------------------------------------------------------------------
+function Button:setSelectedImage(texture)
+    self:setStyle(Button.STYLE_SELECTED_IMAGE, texture)
+end
+
+--------------------------------------------------------------------------------
+-- Sets the disabled image.
+-- @param texture texture
+--------------------------------------------------------------------------------
+function Button:setDisabledImage(texture)
+    self:setStyle(Button.STYLE_DISABLED_IMAGE, texture)
 end
 
 --------------------------------------------------------------------------------

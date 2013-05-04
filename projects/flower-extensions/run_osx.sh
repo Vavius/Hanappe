@@ -3,7 +3,7 @@ cd `dirname $0`
 
 # moai setting
 MOAI_HOME=~/moai-sdk
-MOAI_BIN=$MOAI_HOME/bin/osx/moai
+MOAI_BIN=moai
 
 # local setting
 BIN_DIR=./bin
