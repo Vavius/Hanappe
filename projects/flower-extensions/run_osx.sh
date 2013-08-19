@@ -2,7 +2,7 @@
 cd `dirname $0`
 
 # moai setting
-MOAI_HOME=~/moai-sdk
+MOAI_HOME=~/moai/moai-dev
 MOAI_BIN=$MOAI_HOME/bin/osx/moai
 
 # local setting
