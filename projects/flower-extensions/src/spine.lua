@@ -26,7 +26,6 @@ local Event         = flower.Event
 -- forward declarations
 local AttachmentLoader
 local AtlasAttachmentLoader
-local AnimStateData
 
 -- Classes
 local Bone
@@ -44,8 +43,10 @@ local MOAIColorInterface        = MOAIColor.getInterfaceTable()
 
 ---
 -- Internal helper functions
----
-local function _wrapAngle(angle)
+--
+local Utils = {}
+
+function Utils.wrapAngle(angle)
     while angle > 180 do
         angle = angle - 360
     end
@@ -55,7 +56,7 @@ local function _wrapAngle(angle)
     return angle
 end
 
-local function genBezierKeys(numkeys, cx1, cy1, cx2, cy2)
+function Utils.genBezierKeys(numkeys, cx1, cy1, cx2, cy2)
     local subdiv_step = 1 / numkeys
     local subdiv_step2 = subdiv_step * subdiv_step
     local subdiv_step3 = subdiv_step2 * subdiv_step
@@ -96,12 +97,50 @@ local function genBezierKeys(numkeys, cx1, cy1, cx2, cy2)
     return res
 end
 
-local function hexToRGBA(color)
+-- premultiply alpha
+function Utils.hexToRGBA(color)
     local a = tonumber(color:sub(7, 8), 16) / 255
     return  a * tonumber(color:sub(1, 2), 16) / 255,
             a * tonumber(color:sub(3, 4), 16) / 255,
             a * tonumber(color:sub(5, 6), 16) / 255,
             a
+end
+
+function Utils.split(str, pat)
+    local t = {}  -- NOTE: use {n = 0} in Lua-5.0
+    local fpat = "(.-)" .. pat
+    local last_end = 1
+    local s, e, cap = str:find(fpat, 1)
+    while s do
+        if s ~= 1 or cap ~= "" then
+            table.insert(t,cap)
+        end
+        last_end = e+1
+        s, e, cap = str:find(fpat, last_end)
+    end
+    if last_end <= #str then
+        cap = str:sub(last_end)
+        table.insert(t, cap)
+    end
+    return t
+end
+
+function Utils.length(haystack)
+    local count = 0
+    for _ in pairs(haystack) do count = count + 1 end
+    return count
+end
+
+function Utils.trim(text)
+    return text:gsub("^%s*(.-)%s*$", "%1")
+end
+
+function Utils.getPath(str)
+    return str:match("(.*/)")
+end
+
+function Utils.getExtension(str)
+    return str:match("(.[^.]+)$")
 end
 
 --[[
@@ -136,6 +175,213 @@ function table.bininsert(t, value, fcomp)
     table.insert( t,(iMid+iState),value )
     return (iMid+iState)
 end
+
+function table.isEmpty(t)
+    if next(t) == nil then
+        return true
+    end
+    return false
+end
+
+---
+-- @type AtlasMgr
+--
+-- Read Spine atlas files
+AtlasMgr = class()
+AtlasMgr.atlasCache = {}
+
+AtlasMgr.FILTERS = {
+    Nearest = MOAITexture.GL_NEAREST,
+    Linear  = MOAITexture.GL_LINEAR,
+    MipMapNearestNearest = MOAITexture.GL_NEAREST_MIPMAP_NEAREST, 
+    MipMapLinearNearest  = MOAITexture.GL_LINEAR_MIPMAP_NEAREST,
+    MipMapNearestLinear  = MOAITexture.GL_NEAREST_MIPMAP_LINEAR, 
+    MipMapLinearLinear   = MOAITexture.GL_LINEAR_MIPMAP_LINEAR
+}
+
+function AtlasMgr:init()
+
+end
+
+---
+-- Parse one line in spine atlas file into lua table
+-- @param data output table
+-- @param line input line
+function AtlasMgr:parseLine(data, line)
+    if not line:find(":") then
+        data.name = Utils.trim(line)
+    else
+        local key, value = unpack(Utils.split(line, ":"))
+        value = Utils.trim(value)
+        if value:find(",") then
+            value = Utils.split(value, ",")
+        elseif value == "false" then
+            value = false
+        elseif value == "true" then
+            value = true
+        end
+        data[Utils.trim(key)] = value
+    end
+end
+
+---
+-- Parse spine atlas file. Internall use
+-- @param atlas full path to spine atlas file
+-- @return lua table with atlas data
+function AtlasMgr:load(atlas)
+    local pagesData = {}
+    local pageData = {}
+    local regionsData = {}
+    local regionData = {}
+    local path = Utils.getPath(atlas)
+
+    local input = io.input(atlas)
+
+    for line in input:lines() do
+        if line:len() == 0 and not table.isEmpty(pageData) then
+            if not table.isEmpty(regionData) then 
+                table.insert(regionsData, regionData)
+            end
+            pageData.regions = regionsData
+            table.insert(pagesData, pageData)
+            regionsData = {}
+            regionData = {}
+            pageData = {}
+        else
+            if Utils.length(pageData) < 4 then
+                self:parseLine(pageData, line)
+            else
+                if not line:find(":") and not table.isEmpty(regionData) then
+                    table.insert(regionsData, regionData)
+                    regionData = {}
+                end
+                self:parseLine(regionData, line)
+            end
+        end
+    end
+    table.insert(regionsData, regionData)
+    pageData.regions = regionsData
+    table.insert(pagesData, pageData)
+
+    input:close()
+
+    local atlas = {}
+    for i, pageData in ipairs(pagesData) do
+        atlas[i] = {
+            texturePath = path .. pageData.name,
+            minFilter = AtlasMgr.FILTERS[pageData.filter[1]],
+            maxFilter = AtlasMgr.FILTERS[pageData.filter[2]],
+            regions = {},
+        }
+        
+        for j, regionData in ipairs(pageData.regions) do
+            atlas[i].regions[regionData.name] = {
+                rect = {
+                    x = tonumber(regionData.offset[1]),
+                    y = tonumber(regionData.offset[2]),
+                    width = tonumber(regionData.size[1]),
+                    height = tonumber(regionData.size[2]),
+                },
+
+                x = tonumber(regionData.xy[1]),
+                y = tonumber(regionData.xy[2]),
+                
+                origWidth = tonumber(regionData.orig[1]),
+                origHeight = tonumber(regionData.orig[2]),
+                rotate = regionData.rotate,
+            }
+        end
+    end
+
+    return atlas
+end
+
+--- 
+-- Return deck and index for displaying attachment
+-- @param attachmentName actual attachment name
+-- @param atlasName attachment will be looked up in this atlas
+-- @param scale skeleton scale
+function AtlasMgr:getAttachmentDeckAndIndex(attachmentName, atlasName, scale)
+    local fullPath = Resources.getResourceFilePath(atlasName)
+    local cache = AtlasMgr.atlasCache
+
+    if cache[fullPath] == nil then
+        cache[fullPath] = AtlasMgr:load(fullPath)
+    end
+    local atlasPagesMap = cache[fullPath]
+
+    local deck
+    local index
+    local textureInfo
+    for i, page in ipairs(atlasPagesMap) do
+        if page.regions and page.regions[attachmentName] then
+            deck = self:getSpineAtlasDeck(page, scale)
+            index = page.regions[attachmentName].deckIndex
+        end
+    end
+
+    return deck, index
+end
+
+---
+-- Return the Deck for displaying Spine Atlas page
+-- @param atlasData lua table with data for current atlas page
+-- @return Texture atlas deck
+function AtlasMgr:getSpineAtlasDeck(atlasPageData, scale)
+    local key = atlasPageData.texturePath .. "$" .. scale
+    local cache = DeckMgr.atlasDecks
+
+    if not cache[key] then
+        cache[key] = self:createSpineAtlasDeck(atlasPageData, scale)
+    end
+    return cache[key]
+end
+
+---
+-- Create the Deck for displaying one Spine Atlas page
+-- @param atlasData lua table with region data for current atlas page
+-- @return Texture atlas deck
+function AtlasMgr:createSpineAtlasDeck(atlasPage, scale)
+    local frames = atlasPage.regions
+    local totalFrames = Utils.length(frames)
+    local boundsDeck = MOAIBoundsDeck.new()
+    boundsDeck:reserveBounds(totalFrames)
+    boundsDeck:reserveIndices(totalFrames)
+
+    local texture = flower.getTexture(atlasPage.texturePath)
+    assert(texture, "AtlasMgr: cannot load texture")
+    texture:setFilter(atlasPage.minFilter, atlasPage.maxFilter)
+
+    local deck = MOAIGfxQuadDeck2D.new()
+    deck:setBoundsDeck(boundsDeck)
+    deck:reserve(totalFrames)
+    deck:setTexture(texture)
+
+    local width, height = texture:getSize()
+
+    local i = 1
+    for name, frame in pairs(frames) do
+        local r = frame.rect
+        local x, y = frame.x, frame.y
+        
+        if frame.rotate then
+            local u0, v0, u1, v1 = x / width, y / height, (x + r.height) / width, (y + r.width) / height
+            deck:setUVQuad(i, u1, v1, u1, v0, u0, v0, u0, v1)
+        else
+            local u0, v0, u1, v1 = x / width, y / height, (x + r.width) / width, (y + r.height) / height
+            deck:setUVQuad(i, u0, v1, u1, v1, u1, v0, u0, v0)
+        end
+
+        deck:setRect(i, r.x * scale, r.y * scale, (r.x + r.width) * scale, (r.y + r.height) * scale)
+        boundsDeck:setBounds(i, 0, 0, 0, frame.origWidth * scale, frame.origHeight * scale, 0)
+        boundsDeck:setIndex(i, i)
+        frame.deckIndex = i
+        i = i + 1
+    end
+
+    return deck
+end
+
 
 --
 -- @type Bone
@@ -176,8 +422,8 @@ end
 -- Attach this bone to new parent
 -- @param parent parent bone object reference
 function Bone:setParent(parent)
+    self:clearAttrLink(MOAITransform.INHERIT_TRANSFORM)
     if parent then
-        self:clearAttrLink(MOAITransform.INHERIT_TRANSFORM)
         self:setAttrLink(MOAITransform.INHERIT_TRANSFORM, parent, MOAITransform.TRANSFORM_TRAIT)
     end
 end
@@ -208,8 +454,8 @@ end
 -- Attach slot to a bone
 -- @param bone bone object
 function Slot:setBone(bone)
+    self:clearAttrLink(MOAITransform.INHERIT_TRANSFORM)
     if bone then
-        self:clearAttrLink(MOAITransform.INHERIT_TRANSFORM)
         self:setAttrLink(MOAITransform.INHERIT_TRANSFORM, bone, MOAITransform.TRANSFORM_TRAIT)
     end
 end
@@ -219,6 +465,9 @@ end
 -- @param attachment attachment object
 function Slot:setAttachment(attachment)
     if not attachment then
+        self:setDeck()
+        self:setIndex()
+        self:setTexture()
         return
     end
 
@@ -244,7 +493,7 @@ function Slot:setToBindPose()
         self:setAttachment(self.skeleton:getAttachment(attachment, self._data.name))
     end
 
-    self:setColor(hexToRGBA(color))
+    self:setColor(Utils.hexToRGBA(color))
 end
 
 ---
@@ -255,6 +504,8 @@ end
 -- This transform is used to offset attachment from the bone. 
 Attachment = class()
 M.Attachment = Attachment
+
+Attachment.NO_ATTACHMENT = json.JSON_NULL
 
 ---
 -- The constructor.
@@ -274,10 +525,20 @@ function Attachment:initRegionAttachment()
     local skeleton = self.skeleton
     local attachmentData = self._data
     local actualName = attachmentData.name or self.name
+    local scaleX, scaleY = math.abs(skeleton.scaleX), math.abs(skeleton.scaleY)
 
-    self:setDeck(DeckMgr:getImageDeck(attachmentData.width, attachmentData.height))
-    self:setDeckIndex(1)
-    self:setTexture(flower.getTexture(self.skeleton.attachmentsFolder .. actualName .. ".png"))
+    local index = 1
+    local deck = DeckMgr:getImageDeck(scaleX * attachmentData.width, scaleY * attachmentData.height)
+
+    if skeleton.usesAtlas then
+        deck, index = AtlasMgr:getAttachmentDeckAndIndex(actualName, skeleton.attachmentsPath, scaleX)
+        self:setTexture(nil)
+    else
+        self:setTexture(flower.getTexture(self.skeleton.attachmentsPath .. actualName .. ".png"))
+    end
+
+    self:setDeck(deck)
+    self:setDeckIndex(index)
 end
 
 function Attachment:setDeck(deck)
@@ -355,12 +616,12 @@ Skeleton.DEFAULT_SKIN = 'default'
 -- scaleX, scaleY and scaleZrot can be used for coordinate translation from spine to current project. 
 -- 
 -- @param path skeleton json path 
--- @param attachmentsFolder (option) path to attachment images
+-- @param attachmentsPath (option) path to attachment images
 -- @param scaleX (option) x scale of the skeleton. Can be used to scale skeleton for different resolutions
 -- @param scaleY (option) x scale of the skeleton
 -- @param scaleZrot (option) rotation scale
 -----------------------------
-function Skeleton:init(path, attachmentsFolder, scaleX, scaleY, scaleZrot)
+function Skeleton:init(path, attachmentsPath, scaleX, scaleY, scaleZrot)
     DisplayObject.init(self)
     local filepath = Resources.getResourceFilePath(path)
     local jsonData = Resources.readFile(filepath)
@@ -371,7 +632,8 @@ function Skeleton:init(path, attachmentsFolder, scaleX, scaleY, scaleZrot)
     self.scaleX = scaleX or 1
     self.scaleY = scaleY or -1
     self.scaleZrot = scaleZrot or -1
-    self.attachmentsFolder = attachmentsFolder or ""
+    self.attachmentsPath = attachmentsPath or Utils.getPath(path)
+    self.usesAtlas = attachmentsPath and (Utils.getExtension(attachmentsPath) == ".atlas")
 
     self:_initBones()
     self:_initAttachments()
@@ -478,8 +740,13 @@ end
 -- @param attachmentName name of the attachment
 -- @param slotName name of the slot for that attachment
 function Skeleton:getAttachment(attachmentName, slotName)
-    local curSkinAttachment = self.skins[self.currentSkin][slotName][attachmentName]
-    local defaultAttachment = self.skins[Skeleton.DEFAULT_SKIN][slotName][attachmentName]
+    if attachmentName == Attachment.NO_ATTACHMENT then
+        return nil
+    end
+
+    local curSkin = self.skins[self.currentSkin]
+    local curSkinAttachment = curSkin[slotName] and curSkin[slotName][attachmentName]
+    local defaultAttachment = self.skins[Skeleton.DEFAULT_SKIN][slotName] and self.skins[Skeleton.DEFAULT_SKIN][slotName][attachmentName]
 
     return curSkinAttachment or defaultAttachment
 end
@@ -517,16 +784,23 @@ function Skeleton:setLayer(layer)
 end
 
 ---
+-- This event is called when scene is destroyed
+function Skeleton:onSceneStop(e)
+
+end
+
+---
 -- Set new skin to use
 -- @param skinName skin name
 function Skeleton:setSkin(skinName)
     local skin = self.skins[skinName]
+    assert(skin, "Skin not found")
+    self.currentSkin = skinName
 
     for slotName, slot in pairs(self.slots) do
-        local attachment = skin[slotName][slot.data.attachment]
+        local attachment = self:getAttachment(slot._data.attachment, slotName)
         slot:setAttachment(attachment)
     end
-    self.currentSkin = skinName
 end
 
 ---
@@ -544,24 +818,36 @@ end
 ---
 -- Play animation
 -- @param animationName animation name
-function Skeleton:playAnimation(animationName)
+-- @param loop (option) loop the animation. Default is false
+-- @return animation object
+function Skeleton:playAnim(animationName, loop)
     local anim = self.animations[animationName]
 
     if anim then
         anim:start()
-        self.curAnim = animationName
+        if loop then
+            anim:setMode(MOAITimer.LOOP)
+        else 
+            anim:setMode(MOAITimer.NORMAL)
+        end
     end
+
+    return anim
 end
 
 ---
--- Stop current animation
-function Skeleton:stopAnimation()
-    if self.curAnim then
-        self.animations[self.curAnim]:stop()
+-- Stop animation
+-- @param animationName name of animation to stop or nil to stop all animations
+function Skeleton:stopAnim(animationName)
+    local anim = self.animations[animationName]
+    if anim then
+        anim:stop()
+    else
+        for name, anim in pairs(self.animations) do
+            anim:stop()
+        end
     end
-    self.curAnim = nil
 end
-
 
 ---
 -- @type Animation
@@ -625,8 +911,6 @@ function Animation:init(animationData, skeleton)
     end
 
     self:createEventCallbacks()
-
-    self:setMode(MOAITimer.LOOP)
 end
 
 function Animation:countLinks()
@@ -675,7 +959,7 @@ function Animation:countKeys(keysData)
 end
 
 function Animation:createBezierKeys(curve, bezierData, startIndex, startTime, endTime, startValues, endValues)
-    local keys = genBezierKeys(Animation.BEZIER_SUBDIVS + 1, bezierData[1], bezierData[2], bezierData[3], bezierData[4])
+    local keys = Utils.genBezierKeys(Animation.BEZIER_SUBDIVS + 1, bezierData[1], bezierData[2], bezierData[3], bezierData[4])
     local timeDiff = endTime - startTime
 
     local valuesDiff = {}
@@ -708,13 +992,13 @@ function Animation:createRotateLinks(keysData, target)
     local bezierIndexOffset = 0
 
     for i, key in ipairs(keysData) do
-        local val = _wrapAngle(angle + key.angle * m_r - lastAngle)
+        local val = Utils.wrapAngle(angle + key.angle * m_r - lastAngle)
         lastAngle = lastAngle + val
         
         local easeType = key.curve == "stepped" and MOAIEaseType.FLAT or MOAIEaseType.LINEAR
         
         if type(key.curve) == 'table' then
-            local nextAngle = _wrapAngle(angle + keysData[i + 1].angle * m_r - lastAngle)
+            local nextAngle = Utils.wrapAngle(angle + keysData[i + 1].angle * m_r - lastAngle)
             nextAngle = nextAngle + lastAngle
             self:createBezierKeys(curve, key.curve, i + bezierIndexOffset, key.time, keysData[i + 1].time, {lastAngle}, {nextAngle})
             bezierIndexOffset = bezierIndexOffset + Animation.BEZIER_SUBDIVS - 1
@@ -804,11 +1088,11 @@ function Animation:createColorLinks(keysData, target)
     local bezierIndexOffset = 0
 
     for i, key in ipairs(keysData) do
-        local r, g, b, a = hexToRGBA(key.color)
+        local r, g, b, a = Utils.hexToRGBA(key.color)
         local easeType = key.curve == "stepped" and MOAIEaseType.FLAT or MOAIEaseType.LINEAR
         
         if type(key.curve) == 'table' then
-            local r2, g2, b2, a2 = hexToRGBA(keysData[i + 1].color)
+            local r2, g2, b2, a2 = Utils.hexToRGBA(keysData[i + 1].color)
             
             self:createBezierKeys(curveR, key.curve, i + bezierIndexOffset, key.time, keysData[i + 1].time, r, r2)
             self:createBezierKeys(curveG, key.curve, i + bezierIndexOffset, key.time, keysData[i + 1].time, g, g2)
@@ -866,22 +1150,15 @@ function Animation:createEventCallbacks()
     eventCurve:reserveKeys(#eventKeyframes)
     
     for i, key in ipairs(eventKeyframes) do
-        eventCurve:setKey(i, key.time, key._type, MOAIEaseType.FLAT)
-
-        if key._type == Animation.EVENT_ATTACHMENT then
+        eventCurve:setKey(i, key.time, 0, MOAIEaseType.FLAT)
             eventKeyframes[i] = {
+                eventType = key._type,
                 name = key.name,
                 target = key._target,
-            }
-
-        elseif key._type == Animation.EVENT_CUSTOM then
-            eventKeyframes[i] = {
-                name = key.name,
                 int = key.int,
                 float = key.float,
                 string = key.string,
             }
-        end
     end
 
     self:setListener(MOAITimer.EVENT_TIMER_KEYFRAME, self.timerEventCallback)
@@ -890,24 +1167,23 @@ end
 
 function Animation:timerEventCallback(keyframe, timesExecuted, time, value)
     local skeleton = self.skeleton
+    local event = self.eventKeyframes[keyframe]
 
-    if value == Animation.EVENT_ATTACHMENT then
-        local attachment = self.eventKeyframes[keyframe]
-        local target = attachment.target
+    if event.eventType == Animation.EVENT_ATTACHMENT then
+        local target = event.target
+        target:setAttachment( skeleton:getAttachment(event.name, target._data.name) )
 
-        target:setAttachment( skeleton:getAttachment(attachment.name, target._data.name) )
-
-    elseif value == Animation.EVENT_CUSTOM then
-        local event = self.eventKeyframes[keyframe]
-        local poseEvent = skeleton.events[event.name]
+    elseif event.eventType == Animation.EVENT_CUSTOM then
+        local defaultEvent = skeleton.events[event.name]
         local eventData = {
-            int = event.int or poseEvent.int,
-            float = event.float or poseEvent.float,
-            string = event.string or poseEvent.string,
+            int = event.int or defaultEvent.int,
+            float = event.float or defaultEvent.float,
+            string = event.string or defaultEvent.string,
         }
 
-        skeleton:dispatchEvent(poseEvent, eventData)
+        skeleton:dispatchEvent(defaultEvent, eventData)
     end
 end
+
 
 return M
